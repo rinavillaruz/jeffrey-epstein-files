@@ -1,0 +1,235 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins
+  namespace: jenkins
+  labels:
+    app: jenkins
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jenkins
+  template:
+    metadata:
+      labels:
+        app: jenkins
+    spec:
+      serviceAccountName: jenkins
+      imagePullSecrets:
+        - name: dockerhub-pull-secret
+      
+      securityContext:
+        fsGroup: 1000
+      
+      initContainers:
+        - name: fix-permissions
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              echo "Fixing permissions..."
+              chown -R 1000:1000 /var/jenkins_home
+              chmod -R 755 /var/jenkins_home
+              mkdir -p /var/jenkins_home/workspace
+              chmod -R 777 /var/jenkins_home/workspace
+              echo "Permissions fixed!"
+          volumeMounts:
+            - name: jenkins-data
+              mountPath: /var/jenkins_home
+          securityContext:
+            runAsUser: 0
+
+        - name: fix-docker-socket
+          image: busybox
+          command: ['sh', '-c', 'chmod 666 /var/run/docker.sock']
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+          securityContext:
+            privileged: true
+
+        - name: fix-workspace-permissions
+          image: busybox
+          command: ['sh', '-c', 'mkdir -p /var/jenkins_home/workspace && chmod -R 777 /var/jenkins_home/workspace']
+          volumeMounts:
+            - name: jenkins-data
+              mountPath: /var/jenkins_home
+          securityContext:
+            runAsUser: 0
+            
+        - name: install-docker-cli
+          image: rinavillaruz/jenkins-docker:latest
+          command:
+            - sh
+            - -c
+            - |
+              echo "=========================================="
+              echo "Installing Docker CLI"
+              echo "=========================================="
+              
+              cat > /var/jenkins_home/install-docker.sh <<'EOF'
+              #!/bin/bash
+              if ! command -v docker &> /dev/null; then
+                  echo "Installing Docker CLI..."
+                  apt-get update -qq > /dev/null 2>&1
+                  apt-get install -y docker.io > /dev/null 2>&1
+                  usermod -aG docker jenkins 2>&1 || true
+                  echo "Docker CLI installed!"
+              else
+                  echo "Docker CLI already installed"
+              fi
+              EOF
+              
+              chmod +x /var/jenkins_home/install-docker.sh
+              echo "✅ Docker installation script prepared"
+              echo "=========================================="
+          volumeMounts:
+            - name: jenkins-data
+              mountPath: /var/jenkins_home
+        
+        - name: install-plugins
+          image: rinavillaruz/jenkins-docker:latest
+          command:
+            - sh
+            - -c
+            - |
+              echo "=========================================="
+              echo "Installing Jenkins Plugins"
+              echo "=========================================="
+              
+              mkdir -p /var/jenkins_home/plugins
+              
+              jenkins-plugin-cli \
+                --plugin-file /usr/share/jenkins/ref/plugins.txt \
+                --plugin-download-directory /var/jenkins_home/plugins \
+                --verbose
+              
+              chown -R 1000:1000 /var/jenkins_home/plugins
+              
+              echo "=========================================="
+              echo "Listing installed plugins:"
+              ls -la /var/jenkins_home/plugins/ | head -20
+              echo "=========================================="
+              echo "Plugins installed successfully!"
+              echo "=========================================="
+          volumeMounts:
+            - name: jenkins-data
+              mountPath: /var/jenkins_home
+            - name: jenkins-config
+              mountPath: /usr/share/jenkins/ref/plugins.txt
+              subPath: plugins.txt
+      
+      containers:
+        - name: jenkins
+          image: rinavillaruz/jenkins-docker:latest
+          imagePullPolicy: IfNotPresent
+          
+          securityContext:
+            privileged: true
+            runAsUser: 1000
+            runAsGroup: 1000
+
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+            - containerPort: 50000
+              name: jnlp
+              protocol: TCP
+          
+          env:
+            - name: JAVA_OPTS
+              value: "-Djenkins.install.runSetupWizard=false -Dhudson.model.UpdateCenter.never=true -Dorg.jenkinsci.plugins.durabletask.BourneShellScript.LAUNCH_DIAGNOSTICS=true"
+            - name: CASC_JENKINS_CONFIG
+              value: /var/jenkins_home/casc_configs/jenkins.yaml
+            - name: JENKINS_UC_DOWNLOAD
+              value: "https://updates.jenkins.io/download"
+            - name: TRY_UPGRADE_IF_NO_MARKER
+              value: "false"
+            
+            # Slack webhook (optional - only if you use Slack)
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: slack-webhooks
+                  key: jenkins-webhook-url
+                  optional: true
+
+          volumeMounts:
+            - name: jenkins-data
+              mountPath: /var/jenkins_home
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            - name: jenkins-config
+              mountPath: /var/jenkins_home/casc_configs
+            - name: jenkins-credentials
+              mountPath: /run/secrets/jenkins-credentials
+              readOnly: true
+            - name: github-credentials
+              mountPath: /run/secrets/github
+              readOnly: true
+            - name: dockerhub-credentials
+              mountPath: /run/secrets/dockerhub
+              readOnly: true
+            - name: slack-webhook
+              mountPath: /run/secrets/slack
+              readOnly: true
+          
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+          
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: 8080
+            initialDelaySeconds: 180
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: 8080
+            initialDelaySeconds: 150
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      
+      volumes:
+        - name: jenkins-data
+          persistentVolumeClaim:
+            claimName: jenkins-pvc
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+        - name: jenkins-config
+          configMap:
+            name: jenkins-config
+        - name: jenkins-credentials
+          secret:
+            secretName: jenkins-admin-credentials
+        - name: github-credentials
+          secret:
+            secretName: github-credentials
+            optional: true
+        - name: dockerhub-credentials
+          secret:
+            secretName: dockerhub-credentials
+        - name: slack-webhook
+          secret:
+            secretName: slack-webhooks
+            items:
+            - key: jenkins-webhook-url
+              path: jenkins-webhook-url
+            - key: github-webhook-url
+              path: github-webhook-url
+            optional: false

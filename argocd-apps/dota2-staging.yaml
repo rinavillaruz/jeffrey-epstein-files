@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: jeffrey-epstein-files-staging
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  
+  source:
+    repoURL: https://github.com/rinavillaruz/jeffrey-epstein-files
+    targetRevision: main
+    path: deploy/helm
+    helm:
+      valueFiles:
+        - values-staging.yaml
+  
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: data-staging
+  
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated:
+      selfHeal: true
+      prune: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

@@ -1,0 +1,188 @@
+name: Deploy to Environment
+
+on:
+  push:
+    branches:
+      - dev
+      - staging
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Determine environment
+        id: env
+        run: |
+          BRANCH=${GITHUB_REF#refs/heads/}
+          
+          if [[ "$BRANCH" == "staging" ]]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Build and push data-fetcher
+        run: |
+          docker build \
+            --target data-fetcher \
+            -f ./build/Dockerfile.dev \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-fetcher:${{ steps.env.outputs.environment }}-${{ github.run_number }}-${{ github.sha }} \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-fetcher:${{ steps.env.outputs.environment }}-latest \
+            .
+          
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-fetcher:${{ steps.env.outputs.environment }}-${{ github.run_number }}-${{ github.sha }}
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-fetcher:${{ steps.env.outputs.environment }}-latest
+      
+      - name: Build and push trainer
+        run: |
+          docker build \
+            --target trainer \
+            -f ./build/Dockerfile.dev \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-trainer:${{ steps.env.outputs.environment }}-${{ github.run_number }}-${{ github.sha }} \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-trainer:${{ steps.env.outputs.environment }}-latest \
+            .
+          
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-trainer:${{ steps.env.outputs.environment }}-${{ github.run_number }}-${{ github.sha }}
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-trainer:${{ steps.env.outputs.environment }}-latest
+      
+      - name: Build and push api
+        run: |
+          docker build \
+            --target api \
+            -f ./build/Dockerfile.dev \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-api:${{ steps.env.outputs.environment }}-${{ github.run_number }}-${{ github.sha }} \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-api:${{ steps.env.outputs.environment }}-latest \
+            .
+          
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-api:${{ steps.env.outputs.environment }}-${{ github.run_number }}-${{ github.sha }}
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/jeffrey-epstein-files-api:${{ steps.env.outputs.environment }}-latest
+      
+      - name: Deploy with Helm
+        env:
+          ENVIRONMENT: ${{ steps.env.outputs.environment }}
+          IMAGE_TAG: ${{ steps.env.outputs.environment }}-${{ github.run_number }}-${{ github.sha }}
+        run: |
+          # Use environment-specific namespace
+          if [[ "$ENVIRONMENT" == "production" ]]; then
+            NAMESPACE="data"
+          else
+            NAMESPACE="data-$ENVIRONMENT"
+          fi
+          
+          helm upgrade --install jeffrey-epstein-files-$ENVIRONMENT ./deploy/helm \
+            -f ./deploy/helm/values-$ENVIRONMENT.yaml \
+            --set image.tag=$IMAGE_TAG \
+            -n $NAMESPACE \
+            --create-namespace
+      
+      - name: Send Slack notification
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          ENV="${{ steps.env.outputs.environment }}"
+          BRANCH="${{ steps.env.outputs.branch }}"
+          TAG="${{ steps.env.outputs.environment }}-${{ github.run_number }}-${{ github.sha }}"
+          COMMIT_MSG=$(git log -1 --pretty=format:'%s')
+          COMMIT_AUTHOR=$(git log -1 --pretty=format:'%an')
+          COMMIT_URL="${{ github.event.repository.html_url }}/commit/${{ github.sha }}"
+          RUN_URL="${{ github.event.repository.html_url }}/actions/runs/${{ github.run_id }}"
+          
+          # Calculate duration (Mac-compatible)
+          START_TIME="${{ github.event.head_commit.timestamp }}"
+          END_TIME=$(date -u +%s)
+          START_TIMESTAMP=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$START_TIME" +%s 2>/dev/null || echo $END_TIME)
+          DURATION=$((END_TIME - START_TIMESTAMP))
+          MINUTES=$((DURATION / 60))
+          SECONDS=$((DURATION % 60))
+          
+          if [ $MINUTES -gt 0 ]; then
+            DURATION_TEXT="${MINUTES}m ${SECONDS}s"
+          else
+            DURATION_TEXT="${SECONDS}s"
+          fi
+          
+          # Get namespace and release name
+          if [[ "$ENV" == "production" ]]; then
+            NAMESPACE="data"
+          else
+            NAMESPACE="data-$ENV"
+          fi
+          RELEASE_NAME="jeffrey-epstein-files-$ENV"
+          
+          # Get previous deployment info (if exists)
+          PREV_TAG=$(helm get values $RELEASE_NAME -n $NAMESPACE -o json 2>/dev/null | jq -r '.image.tag // "none"')
+          if [ "$PREV_TAG" = "none" ] || [ -z "$PREV_TAG" ]; then
+            PREV_TAG="First deployment"
+            ROLLBACK_CMD=""
+          else
+            ROLLBACK_CMD="helm rollback $RELEASE_NAME -n $NAMESPACE"
+          fi
+          
+          # Count changed files
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | wc -l | tr -d ' ')
+          
+          # Get deployed services info
+          SERVICES="🔹 Data Fetcher\n🔹 Trainer\n🔹 API"
+          if [ "$ENV" = "dev" ]; then
+            SERVICES="$SERVICES\n🔹 Jupyter Notebook"
+          fi
+          
+          if [ "$STATUS" = "success" ]; then
+            COLOR="good"
+            EMOJI="✅"
+            TEXT="Deployment Successful"
+            EXTRA_FIELDS=""
+          else
+            COLOR="danger"
+            EMOJI="❌"
+            TEXT="Deployment Failed"
+            EXTRA_FIELDS=",{\"title\": \"📋 Logs\", \"value\": \"<$RUN_URL|View Failure Logs>\", \"short\": false}"
+          fi
+          
+          # Monitoring URL (customize to your setup)
+          MONITORING_URL="http://localhost:30000/d/jeffrey-epstein-files-$ENV"
+          
+          curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H 'Content-Type: application/json' \
+            -d "{
+              \"channel\": \"#github-deployments\",
+              \"username\": \"GitHub Actions\",
+              \"icon_emoji\": \":github:\",
+              \"attachments\": [{
+                \"color\": \"$COLOR\",
+                \"title\": \"$EMOJI $TEXT - $ENV Environment\",
+                \"title_link\": \"$RUN_URL\",
+                \"fields\": [
+                  {\"title\": \"🌿 Branch\", \"value\": \"$BRANCH\", \"short\": true},
+                  {\"title\": \"⏱️ Duration\", \"value\": \"$DURATION_TEXT\", \"short\": true},
+                  {\"title\": \"🔢 Run Number\", \"value\": \"#${{ github.run_number }}\", \"short\": true},
+                  {\"title\": \"📝 Changed Files\", \"value\": \"$CHANGED_FILES files\", \"short\": true},
+                  {\"title\": \"💬 Commit Message\", \"value\": \"<$COMMIT_URL|${COMMIT_MSG}>\", \"short\": false},
+                  {\"title\": \"📦 Services Deployed\", \"value\": \"$SERVICES\", \"short\": true},
+                  {\"title\": \"🏷️ Current Image Tag\", \"value\": \"\`$TAG\`\", \"short\": true},
+                  {\"title\": \"🏷️ Previous Image Tag\", \"value\": \"\`$PREV_TAG\`\", \"short\": true},
+                  {\"title\": \"📍 Namespace\", \"value\": \"\`$NAMESPACE\`\", \"short\": true},
+                  {\"title\": \"🎯 Helm Release\", \"value\": \"\`$RELEASE_NAME\`\", \"short\": true},
+                  {\"title\": \"👤 Triggered By\", \"value\": \"${{ github.actor }}\", \"short\": true},
+                  {\"title\": \"✍️ Commit Author\", \"value\": \"$COMMIT_AUTHOR\", \"short\": true},
+                  {\"title\": \"📊 Monitoring\", \"value\": \"<$MONITORING_URL|View Dashboard>\", \"short\": true},
+                  {\"title\": \"🔄 Rollback Command\", \"value\": \"\`$ROLLBACK_CMD\`\", \"short\": false}
+                  $EXTRA_FIELDS
+                ],
+                \"footer\": \"GitHub Actions • Self-Hosted Runner • $NAMESPACE\",
+                \"footer_icon\": \"https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png\",
+                \"ts\": $(date +%s)
+              }]
+            }"

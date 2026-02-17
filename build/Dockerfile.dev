@@ -1,0 +1,150 @@
+# syntax=docker/dockerfile:1
+# Multi-stage Dockerfile for Jeffrey Epstein Files - Production Optimized
+# Organized structure with minimal image sizes and optimal layer caching
+
+# =============================================================================
+# Base Stage - Shared Dependencies
+# =============================================================================
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+# Set environment variables for Python and pip
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install system dependencies (if needed)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
+# Stage 1: Data Fetcher
+# =============================================================================
+FROM base AS data-fetcher
+
+# Copy requirements
+COPY build/requirements.txt .
+
+# Install Python packages with cache mount and progress
+RUN --mount=type=cache,target=/root/.cache/pip \
+    echo "📦 Installing packages for data-fetcher..." && \
+    pip install --progress-bar on -r requirements.txt && \
+    echo "✅ Packages installed successfully!"
+
+# Copy only what's needed for data fetching
+COPY src/data ./src/data
+COPY src/utils ./src/utils
+COPY scripts/fetch_data.py ./scripts/
+
+# Set environment variables
+# ENV OPENDOTA_API_KEY=""
+ENV OUTPUT_DIR=/data
+ENV LOG_LEVEL=INFO
+
+# This stage fetches data from OpenDota API
+ENTRYPOINT ["python", "scripts/fetch_data.py"]
+
+
+# =============================================================================
+# Stage 2: Model Trainer
+# =============================================================================
+FROM base AS trainer
+
+# Copy requirements
+COPY build/requirements.txt .
+
+# Install Python packages with cache mount and progress
+RUN --mount=type=cache,target=/root/.cache/pip \
+    echo "🤖 Installing packages for trainer..." && \
+    pip install --progress-bar on -r requirements.txt && \
+    echo "✅ Packages installed successfully!"
+
+# Copy only what's needed for training
+# Order matters for cache efficiency - least changing files first
+COPY src/utils ./src/utils
+COPY src/data ./src/data
+COPY src/models ./src/models
+COPY scripts/train_model.py ./scripts/
+
+# Set environment variables
+ENV DATA_DIR=/data/latest
+ENV MODEL_DIR=/models
+ENV EPOCHS=50
+ENV BATCH_SIZE=32
+ENV NUM_HEROES=130
+ENV LOG_LEVEL=INFO
+
+# This stage trains the model
+ENTRYPOINT ["python", "scripts/train_model.py"]
+
+
+# =============================================================================
+# Stage 3: API Server (Production)
+# =============================================================================
+FROM base AS api
+
+# Copy requirements
+COPY build/requirements.txt .
+
+# Install Python packages with cache mount and progress
+RUN --mount=type=cache,target=/root/.cache/pip \
+    echo "🌐 Installing packages for API..." && \
+    pip install --progress-bar on -r requirements.txt && \
+    echo "✅ Packages installed successfully!"
+
+# Copy only what's needed for API
+# Shared dependencies first (better caching)
+COPY src/utils ./src/utils
+COPY src/models ./src/models
+COPY src/api ./src/api
+
+# Set environment variables
+ENV MODEL_DIR=/models
+ENV LOG_LEVEL=INFO
+ENV PYTHONUNBUFFERED=1
+
+# Expose port (changed from 8080 to 8000)
+EXPOSE 8000
+
+# Health check (changed from 8080 to 8000)
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
+  CMD python -c "import requests; requests.get('http://localhost:8000/health')"
+
+# Run API server (changed from 8080 to 8000)
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120", "src.api.app:app"]
+
+
+# =============================================================================
+# Stage 4: ML Pipeline (Complete - All Scripts for Kubernetes Jobs)
+# =============================================================================
+FROM base AS ml-pipeline
+
+# Copy requirements
+COPY build/requirements.txt .
+
+# Install Python packages with cache mount and progress
+RUN --mount=type=cache,target=/root/.cache/pip \
+    echo "🔬 Installing packages for ML pipeline..." && \
+    pip install --progress-bar on -r requirements.txt && \
+    echo "✅ Packages installed successfully!"
+
+# Copy everything needed for the complete ML pipeline
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+
+# Set environment variables
+ENV DATA_DIR=/data/ml-training
+ENV MODEL_DIR=/models
+ENV EPOCHS=50
+ENV BATCH_SIZE=32
+ENV LOG_LEVEL=INFO
+ENV PYTHONPATH=/app
+
+# Default command (can be overridden by Kubernetes jobs)
+CMD ["python", "scripts/train_model.py"]

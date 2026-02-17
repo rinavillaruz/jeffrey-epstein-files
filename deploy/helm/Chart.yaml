@@ -1,0 +1,15 @@
+apiVersion: v2
+name: jeffrey-epstein-files
+description: A Helm chart for Jeffrey Epstein Files Platform
+type: application
+version: 0.1.0
+appVersion: "1.0"
+
+keywords:
+  - jeffrey-epstein-files
+  - machine-learning
+  - analytics
+
+maintainers:
+  - name: Rina Villaruz
+    email: tropes.hunger0c@icloud.com

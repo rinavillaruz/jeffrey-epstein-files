@@ -1,0 +1,64 @@
+{{- if .Values.mlProcessor.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.mlProcessor.name }}-{{ now | date "20060102-150405" }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.mlProcessor.name }}
+    component: ml-pipeline
+    step: process
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.mlProcessor.name }}
+        component: ml-pipeline
+        step: process
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: processor
+          image: {{ .Values.image.registry }}/{{ .Values.image.repository }}/jeffrey-epstein-files-trainer:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: 
+            - /bin/bash
+            - -c
+            - |
+              echo "========================================="
+              echo "PROCESSING DATA"
+              echo "========================================="
+              
+              # Go to app directory first
+              cd /app
+              
+              # Copy data from PVC to local dir (scripts expect ./data)
+              echo "Loading data from persistent storage..."
+              mkdir -p data
+              cp -v /data/ml-training/*.json data/ || echo "No JSON files found"
+              
+              # Show what we copied
+              echo "Files in ./data/:"
+              ls -lh data/
+              
+              # Run the processing script
+              python scripts/analyze_data.py
+              
+              # Copy processed data back to PVC
+              echo "Saving processed data to persistent storage..."
+              cp -v data/processed_matches.csv /data/ml-training/ || echo "No CSV to copy"
+              
+              echo ""
+              echo "✅ Data processed and saved"
+              ls -lh /data/ml-training/
+          resources:
+            {{- toYaml .Values.mlProcessor.resources | nindent 12 }}
+          volumeMounts:
+            - name: training-data
+              mountPath: /data/ml-training
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.mlTrainer.name }}-training-data
+{{- end }}

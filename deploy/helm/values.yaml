@@ -1,0 +1,215 @@
+# Default values for jeffrey-epstein-files
+# This is a base configuration file that can be overridden by environment-specific files
+
+# ==============================================================================
+# GLOBAL SETTINGS
+# ==============================================================================
+global:
+  namespace: data
+  imageTag: latest
+
+# ==============================================================================
+# STORAGE SETTINGS
+# ==============================================================================
+storage:
+  createStorageClass: true
+  storageClassName: standard
+
+# ==============================================================================
+# IMAGE SETTINGS
+# ==============================================================================
+image:
+  registry: docker.io
+  repository: rinavillaruz
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# ==============================================================================
+# MONGODB
+# ==============================================================================
+mongodb:
+  enabled: true
+  replicas: 1
+  image: mongo:7.0
+  port: 27017
+  database: jeffrey_epstein_files
+  persistence:
+    enabled: true
+    size: 5Gi
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+  secret:
+    name: mongodb-secret
+
+# ==============================================================================
+# REDIS
+# ==============================================================================
+redis:
+  enabled: true
+  replicas: 1
+  image: redis:7.2-alpine
+  port: 6379
+  persistence:
+    enabled: true
+    size: 1Gi
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "100m"
+
+# ==============================================================================
+# DATA FETCHER
+# ==============================================================================
+dataFetcher:
+  enabled: true
+  replicas: 1
+  name: jeffrey-epstein-files-fetcher
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+# ==============================================================================
+# ML TRAINER
+# ==============================================================================
+mlTrainer:
+  enabled: true
+  name: jeffrey-epstein-files-trainer
+  image:
+    name: jeffrey-epstein-files-trainer  # Added this to match template expectation
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+# ==============================================================================
+# API SERVICE
+# ==============================================================================
+api:
+  enabled: true
+  replicas: 1
+  name: jeffrey-epstein-files-api
+  port: 8000
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+# ==============================================================================
+# ML PROCESSOR
+# ==============================================================================
+mlProcessor:
+  enabled: false  # Disabled by default, enable in environment files
+  name: jeffrey-epstein-files-ml-processor
+  image:
+    name: jeffrey-epstein-files-trainer  # Uses trainer image (has all scripts)
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+
+# ==============================================================================
+# ML FETCHER
+# ==============================================================================
+mlFetcher:
+  enabled: false  # Disabled by default, enable in environment files
+  name: jeffrey-epstein-files-ml-fetcher
+  image:
+    name: jeffrey-epstein-files-trainer  # Uses trainer image (has all scripts)
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+# ==============================================================================
+# JUPYTER NOTEBOOK (Disabled by default - enable in environment files)
+# ==============================================================================
+jupyter:
+  enabled: false
+  name: jupyter
+  replicas: 1
+  
+  image:
+    repository: rinavillaruz/jeffrey-epstein-files-jupyter
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  service:
+    name: jupyter
+    type: NodePort
+    port: 8888
+    nodePort: 30888
+  
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  
+  persistence:
+    enabled: false
+    size: 1Gi
+  
+  env: []
+  volumeMounts: []
+  volumes: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  livenessProbe: {}
+  readinessProbe: {}
+
+# ==============================================================================
+# AUTOSCALING
+# ==============================================================================
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+# ==============================================================================
+# SERVICE ACCOUNT
+# ==============================================================================
+serviceAccount:
+  create: true
+  name: ""
+
+# ==============================================================================
+# POD SETTINGS
+# ==============================================================================
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

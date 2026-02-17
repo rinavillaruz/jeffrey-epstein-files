@@ -1,0 +1,52 @@
+{{- if .Values.mlFetcher.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.mlFetcher.name }}-{{ now | date "20060102-150405" }}
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: {{ .Values.mlFetcher.name }}
+    component: ml-pipeline
+    step: fetch
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.mlFetcher.name }}
+        component: ml-pipeline
+        step: fetch
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: fetcher
+          image: {{ .Values.image.registry }}/{{ .Values.image.repository }}/{{ .Values.mlFetcher.image.name }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: 
+            - /bin/bash
+            - -c
+            - |
+              echo "========================================="
+              echo "FETCHING DATA FROM AZURE BLOB"
+              echo "========================================="
+              cd /app
+              python scripts/fetch_data.py
+              
+              # Copy to PVC mount (scripts save to ./data, we need it in /data/ml-training)
+              echo "Copying data to persistent storage..."
+              mkdir -p /data/ml-training
+              cp -v data/*.json /data/ml-training/ 2>/dev/null || echo "No JSON files to copy"
+              
+              echo ""
+              echo "✅ Data fetched and saved to /data/ml-training/"
+              ls -lh /data/ml-training/
+          resources:
+            {{- toYaml .Values.mlFetcher.resources | nindent 12 }}
+          volumeMounts:
+            - name: training-data
+              mountPath: /data/ml-training
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.mlTrainer.name }}-training-data
+{{- end }}

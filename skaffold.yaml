@@ -1,0 +1,79 @@
+# skaffold.yaml
+apiVersion: skaffold/v4beta11
+kind: Config
+
+metadata:
+  name: jeffrey-epstein-files
+
+# Build configuration
+build:
+  artifacts:
+  # Data Fetcher
+  - image: rinavillaruz/jeffrey-epstein-files-fetcher
+    docker:
+      dockerfile: build/Dockerfile.dev
+      target: data-fetcher
+    sync:
+      manual:
+      - src: 'src/**/*.py'
+        dest: /app/src
+      - src: 'scripts/**/*.py'
+        dest: /app/scripts
+  
+  # Model Trainer
+  - image: rinavillaruz/jeffrey-epstein-files-trainer
+    docker:
+      dockerfile: build/Dockerfile.dev
+      target: trainer
+    sync:
+      manual:
+      - src: 'src/**/*.py'
+        dest: /app/src
+      - src: 'scripts/**/*.py'
+        dest: /app/scripts
+  
+  # API Service
+  - image: rinavillaruz/jeffrey-epstein-files-api
+    docker:
+      dockerfile: build/Dockerfile.dev
+      target: api
+    sync:
+      manual:
+      - src: 'src/**/*.py'
+        dest: /app/src
+  
+  # Use local Docker daemon for dev
+  local:
+    push: false
+    useBuildkit: true
+
+# Don't deploy - you'll use ./cli/deploy-with-helm.sh instead
+deploy:
+  statusCheckDeadlineSeconds: 300
+  kubectl:
+    defaultNamespace: data-dev
+  
+# Add this section
+manifests:
+  rawYaml:
+  - deploy/helm/templates/ml-api-deployment.yaml
+
+# Port forwarding
+portForward:
+- resourceType: service
+  resourceName: jeffrey-epstein-files-api-service
+  namespace: data-dev
+  port: 8000
+  localPort: 8000
+
+- resourceType: service
+  resourceName: mongodb
+  namespace: data-dev
+  port: 27017
+  localPort: 27017
+
+- resourceType: service
+  resourceName: redis
+  namespace: data-dev
+  port: 6379
+  localPort: 6379

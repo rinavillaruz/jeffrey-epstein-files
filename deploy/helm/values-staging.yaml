@@ -1,0 +1,194 @@
+# Staging environment configuration
+
+# ==============================================================================
+# GLOBAL SETTINGS
+# ==============================================================================
+global:
+  environment: staging
+  namespace: data-staging
+  imageTag: staging-latest
+
+# ==============================================================================
+# STORAGE SETTINGS
+# ==============================================================================
+storage:
+  createStorageClass: false
+  storageClassName: standard
+
+# ==============================================================================
+# IMAGE SETTINGS
+# ==============================================================================
+image:
+  registry: docker.io
+  repository: rinavillaruz
+  tag: "staging-latest"
+  pullPolicy: "Always"
+
+# ==============================================================================
+# MONGODB - Staging scale
+# ==============================================================================
+mongodb:
+  enabled: true
+  replicas: 2
+  image: mongo:7.0
+  port: 27017
+  database: jeffrey_epstein_files
+  # Credentials created by deploy-with-helm.sh from .env file
+  secret:
+    name: mongodb-secret
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1000m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+
+# ==============================================================================
+# REDIS - Staging scale
+# ==============================================================================
+redis:
+  enabled: true
+  replicas: 2
+  image: redis:7.2-alpine
+  port: 6379
+  # Password created by deploy-with-helm.sh from .env file
+  secret:
+    name: redis-secret
+  persistence:
+    enabled: true
+    size: 2Gi
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# ==============================================================================
+# DATA FETCHER
+# ==============================================================================
+dataFetcher:
+  enabled: true
+  name: jeffrey-epstein-files-fetcher
+  schedule: "0 */6 * * *"  # Every 6 hours
+  replicas: 2
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+# ==============================================================================
+# ML TRAINER
+# ==============================================================================
+mlTrainer:
+  enabled: true
+  replicas: 1
+  name: jeffrey-epstein-files-trainer
+  epochs: 50
+  batchSize: 32
+  persistence:
+    enabled: true
+    size: 50Gi
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "2000m"
+    limits:
+      memory: "8Gi"
+      cpu: "4000m"
+
+# ==============================================================================
+# API SERVICE
+# ==============================================================================
+api:
+  enabled: true
+  replicas: 3
+  name: jeffrey-epstein-files-api
+  port: 8000
+  service:
+    name: jeffrey-epstein-files-api-service
+    type: NodePort
+    port: 8000
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+# ==============================================================================
+# JUPYTER NOTEBOOK - Optional in staging
+# ==============================================================================
+jupyter:
+  enabled: false  # Usually disabled in staging
+  name: jupyter
+  namespace: data-staging
+  replicas: 1
+  
+  image:
+    repository: rinavillaruz/jeffrey-epstein-files-jupyter
+    tag: latest
+    pullPolicy: Always
+  
+  service:
+    name: jupyter
+    type: NodePort
+    port: 8888
+    nodePort: 30888
+  
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  
+  persistence:
+    enabled: true
+    size: 5Gi
+  
+  env: []
+  volumeMounts: []
+  volumes: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  livenessProbe: {}
+  readinessProbe: {}
+
+# ==============================================================================
+# DEVELOPMENT POD
+# ==============================================================================
+devPod:
+  enabled: false  # Can enable for staging debugging
+
+# ==============================================================================
+# AUTOSCALING
+# ==============================================================================
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
+
+# ==============================================================================
+# LOGGING
+# ==============================================================================
+logLevel: INFO
+
+# ==============================================================================
+# FEATURES
+# ==============================================================================
+features:
+  metrics: true
+  tracing: false

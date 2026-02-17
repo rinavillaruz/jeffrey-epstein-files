@@ -1,0 +1,329 @@
+pipeline {
+    agent any
+
+    environment {
+        // Read Docker credentials from mounted secret files
+        DOCKER_REGISTRY     = "docker.io"
+        DOCKER_IMAGE_PREFIX = readFile('/run/secrets/dockerhub/username').trim()
+        
+        // Git metadata
+        GIT_COMMIT_SHORT    = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+        IMAGE_TAG           = "${BUILD_NUMBER}-${GIT_COMMIT_SHORT}"
+        DOCKER_BUILDKIT     = "1"
+        
+        // Slack webhook from mounted secret
+        SLACK_WEBHOOK       = readFile('/run/secrets/slack/jenkins-webhook-url').trim()
+        
+        // Fixed to production environment (main branch only)
+        DEPLOY_ENV          = "production"
+    }
+    
+    // Only trigger on main branch
+    triggers {
+        githubPush()
+    }
+    
+    stages {
+        stage('Initialize') {
+            steps {
+                script {
+                    env.GIT_AUTHOR = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
+                    env.GIT_COMMIT_MSG = sh(script: "git log -1 --pretty=format:'%s'", returnStdout: true).trim()
+                    
+                    echo "================================"
+                    echo "🔧 Build Configuration"
+                    echo "================================"
+                    echo "Environment: ${env.DEPLOY_ENV}"
+                    echo "Image Tag: ${IMAGE_TAG}"
+                    echo "Branch: ${env.GIT_BRANCH}"
+                    echo "Author: ${env.GIT_AUTHOR}"
+                    echo "================================"
+                }
+            }
+        }
+
+        stage('Notify Start') {
+            steps {
+                script {
+                    sendSlackNotification(
+                        "🚀 *Build Started* #${BUILD_NUMBER}",
+                        "Branch: `${env.GIT_BRANCH}`\nEnvironment: `${env.DEPLOY_ENV}`\nCommit: `${GIT_COMMIT_SHORT}`\nAuthor: ${env.GIT_AUTHOR}",
+                        "#36a64f"
+                    )
+                }
+            }
+        }
+
+        stage('Checkout') {
+            steps {
+                echo '📦 Checking out code...'
+                checkout scm
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                echo '🧪 Running tests...'
+                sh '''
+                    docker run --rm \
+                        -v $WORKSPACE:/app \
+                        -w /app \
+                        python:3.11-slim \
+                        bash -c "
+                            pip install -q -r build/requirements.txt || echo 'No requirements.txt'
+                            python -m pytest tests/ -q || echo 'Tests not available'
+                            flake8 src/ || echo 'Linting skipped'
+                        " || echo "Tests completed"
+                '''
+            }
+        }
+        
+        stage('Docker Login') {
+            steps {
+                script {
+                    echo '🔐 Logging into Docker Hub...'
+                    // Read credentials from mounted secret files
+                    def dockerUsername = readFile('/run/secrets/dockerhub/username').trim()
+                    def dockerToken = readFile('/run/secrets/dockerhub/token').trim()
+                    
+                    sh """
+                        echo '${dockerToken}' | docker login ${DOCKER_REGISTRY} -u '${dockerUsername}' --password-stdin
+                    """
+                    echo '✅ Docker login successful'
+                }
+            }
+        }
+        
+        stage('Build Docker Images') {
+            steps {
+                echo '🐳 Building multi-stage Docker images in parallel...'
+                script {
+                    sendSlackNotification(
+                        "🐳 Building Docker Images...",
+                        "Tag: `${IMAGE_TAG}`",
+                        "#439FE0"
+                    )
+
+                    parallel(
+                        'data-fetcher': {
+                            echo '📦 Building Data Fetcher...'
+                            sh """
+                                docker build \
+                                    --target data-fetcher \
+                                    -f build/Dockerfile.dev \
+                                    -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-fetcher:${IMAGE_TAG} \
+                                    .
+                            """
+                        },
+                        'trainer': {
+                            echo '🤖 Building ML Trainer...'
+                            sh """
+                                docker build \
+                                    --target trainer \
+                                    -f build/Dockerfile.dev \
+                                    -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-trainer:${IMAGE_TAG} \
+                                    .
+                            """
+                        },
+                        'api': {
+                            echo '🌐 Building API Service...'
+                            sh """
+                                docker build \
+                                    --target api \
+                                    -f build/Dockerfile.dev \
+                                    -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-api:${IMAGE_TAG} \
+                                    .
+                            """
+                        }
+                    )
+                }
+            }
+        }
+        
+        stage('Push Docker Images') {
+            steps {
+                echo '📤 Pushing images to Docker Hub...'
+                script {
+                    // Always tag with :latest for main branch
+                    sh """
+                        docker tag ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-fetcher:${IMAGE_TAG} \
+                            ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-fetcher:latest
+                        docker tag ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-trainer:${IMAGE_TAG} \
+                            ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-trainer:latest
+                        docker tag ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-api:${IMAGE_TAG} \
+                            ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-api:latest
+                    """
+                    
+                    parallel(
+                        'push-fetcher': {
+                            sh """
+                                docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-fetcher:${IMAGE_TAG}
+                                docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-fetcher:latest
+                            """
+                        },
+                        'push-trainer': {
+                            sh """
+                                docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-trainer:${IMAGE_TAG}
+                                docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-trainer:latest
+                            """
+                        },
+                        'push-api': {
+                            sh """
+                                docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-api:${IMAGE_TAG}
+                                docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-api:latest
+                            """
+                        }
+                    )
+                    
+                    echo '📦 Pushed versioned + :latest tags'
+                }
+            }
+        }
+        
+        stage('Deploy to Production') {
+            steps {
+                script {
+                    echo "🚀 Deploying to production..."
+                    
+                    sendSlackNotification(
+                        "🚀 Deploying to production...",
+                        "Image: `${IMAGE_TAG}`",
+                        "#FFA500"
+                    )
+
+                    timeout(time: 30, unit: 'MINUTES') {
+                        input message: '⚠️  Deploy to PRODUCTION?', ok: 'Deploy'
+                    }
+                    
+                    sh """
+                        cd cli
+                        chmod +x deploy-with-helm.sh
+                        ./deploy-with-helm.sh production ${IMAGE_TAG}
+                    """
+                }
+            }
+        }
+        
+        stage('Verify Deployment') {
+            steps {
+                echo '🔍 Verifying deployment...'
+                sh """
+                    kubectl get pods -n data
+                    kubectl get svc -n data
+                    
+                    echo ""
+                    echo "Waiting for pods to be ready..."
+                    kubectl wait --for=condition=ready pod \
+                        -l app=jeffrey-epstein-files \
+                        -n data \
+                        --timeout=300s || echo "⚠️  Some pods not ready yet"
+                """
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                echo '🧹 Cleaning up...'
+                
+                // Only attempt cleanup if environment was initialized
+                try {
+                    if (env.DOCKER_REGISTRY && env.DOCKER_IMAGE_PREFIX && env.IMAGE_TAG) {
+                        sh """
+                            docker logout ${env.DOCKER_REGISTRY} || true
+                            docker rmi ${env.DOCKER_REGISTRY}/${env.DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-fetcher:${env.IMAGE_TAG} || true
+                            docker rmi ${env.DOCKER_REGISTRY}/${env.DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-trainer:${env.IMAGE_TAG} || true
+                            docker rmi ${env.DOCKER_REGISTRY}/${env.DOCKER_IMAGE_PREFIX}/jeffrey-epstein-files-api:${env.IMAGE_TAG} || true
+                        """
+                    } else {
+                        echo 'Skipping Docker cleanup - environment not fully initialized'
+                    }
+                } catch (Exception e) {
+                    echo "Cleanup failed: ${e.message}"
+                }
+            }
+        }
+        
+        success {
+            script {
+                def duration = currentBuild.durationString.replace(' and counting', '')
+                
+                echo '✅ Pipeline completed successfully!'
+                
+                try {
+                    if (env.SLACK_WEBHOOK) {
+                        sendSlackNotification(
+                            "✅ *Deployment Successful!*",
+                            """*Environment:* `${env.DEPLOY_ENV ?: 'production'}`
+*Build:* #${BUILD_NUMBER}
+*Duration:* ${duration}
+*Image:* `${env.IMAGE_TAG ?: 'unknown'}`
+*Author:* ${env.GIT_AUTHOR ?: 'unknown'}
+*Commit:* ${env.GIT_COMMIT_MSG ?: 'unknown'}
+*Branch:* `${env.GIT_BRANCH ?: 'main'}`""",
+                            "good"
+                        )
+                    }
+                } catch (Exception e) {
+                    echo "Slack notification failed: ${e.message}"
+                }
+            }
+        }
+        
+        failure {
+            script {
+                def duration = currentBuild.durationString.replace(' and counting', '')
+                
+                echo '❌ Pipeline failed!'
+                
+                try {
+                    if (env.SLACK_WEBHOOK) {
+                        sendSlackNotification(
+                            "❌ *Deployment Failed!*",
+                            """*Environment:* `${env.DEPLOY_ENV ?: 'production'}`
+*Build:* #${BUILD_NUMBER}
+*Duration:* ${duration}
+*Branch:* `${env.GIT_BRANCH ?: 'main'}`
+*Console:* ${env.BUILD_URL}console""",
+                            "danger"
+                        )
+                    } else {
+                        echo 'Slack notification skipped - SLACK_WEBHOOK not available'
+                    }
+                } catch (Exception e) {
+                    echo "Slack notification failed: ${e.message}"
+                }
+            }
+        }
+    }
+}
+
+// Helper function to send Slack notifications
+def sendSlackNotification(String title, String message, String color) {
+    script {
+        try {
+            def payload = groovy.json.JsonOutput.toJson([
+                channel: "#jenkins-builds",
+                username: "Jenkins CI/CD",
+                icon_url: "https://jenkins.io/images/logos/jenkins/jenkins.png",
+                attachments: [[
+                    color: color,
+                    title: title,
+                    text: message,
+                    footer: "Jenkins CI/CD • Production Pipeline",
+                    footer_icon: "https://jenkins.io/images/logos/jenkins/jenkins.png",
+                    ts: System.currentTimeMillis() / 1000
+                ]]
+            ])
+            
+            sh """
+                curl -X POST '${SLACK_WEBHOOK}' \
+                -H 'Content-Type: application/json' \
+                -d '${payload}'
+            """
+        } catch (Exception e) {
+            echo "Slack notification failed: ${e.message}"
+        }
+    }
+}

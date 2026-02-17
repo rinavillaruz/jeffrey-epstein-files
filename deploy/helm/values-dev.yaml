@@ -1,0 +1,233 @@
+# Development environment configuration
+# Overrides values.yaml for local Kind cluster development
+
+# ==============================================================================
+# GLOBAL SETTINGS
+# ==============================================================================
+global:
+  environment: dev
+  namespace: data-dev
+  imageTag: latest
+
+# ==============================================================================
+# STORAGE SETTINGS
+# ==============================================================================
+storage:
+  createStorageClass: true
+  storageClassName: standard
+
+# ==============================================================================
+# IMAGE SETTINGS
+# ==============================================================================
+image:
+  registry: docker.io
+  repository: rinavillaruz
+  tag: "latest"
+  pullPolicy: "IfNotPresent"
+
+# ==============================================================================
+# MONGODB - Minimal resources for dev
+# ==============================================================================
+mongodb:
+  enabled: true
+  replicas: 1
+  image: mongo:7.0
+  port: 27017
+  database: jeffrey_epstein_files
+  secret:
+    name: mongodb-secret
+  persistence:
+    enabled: true
+    size: 5Gi
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+# ==============================================================================
+# REDIS - Minimal resources for dev
+# ==============================================================================
+redis:
+  enabled: true
+  replicas: 1
+  image: redis:7.2-alpine
+  port: 6379
+  secret:
+    name: redis-secret
+  persistence:
+    enabled: true
+    size: 1Gi
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "100m"
+
+# ==============================================================================
+# DATA FETCHER
+# ==============================================================================
+dataFetcher:
+  enabled: true
+  name: jeffrey-epstein-files-fetcher
+  schedule: "0 */12 * * *"
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+# ==============================================================================
+# ML FETCHER JOB - Fetch data from Azure Blob Storage
+# ==============================================================================
+mlFetcher:
+  enabled: false  # Set to true to run fetch job
+  name: jeffrey-epstein-files-ml-fetcher
+  image:
+    name: jeffrey-epstein-files-trainer  # Uses trainer image (has all scripts)
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+# ==============================================================================
+# ML PROCESSOR JOB - Process and analyze fetched data
+# ==============================================================================
+mlProcessor:
+  enabled: false  # Set to true to run process job
+  name: jeffrey-epstein-files-ml-processor
+  image:
+    name: jeffrey-epstein-files-trainer  # Uses trainer image (has all scripts)
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+# ==============================================================================
+# ML TRAINER JOB - Train the model
+# ==============================================================================
+mlTrainer:
+  enabled: false  # Set to true to run training job
+  name: jeffrey-epstein-files-trainer
+  image:
+    name: jeffrey-epstein-files-trainer
+  epochs: 10  # Low for quick dev testing
+  batchSize: 16
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "500m"
+    limits:
+      memory: "4Gi"
+      cpu: "1000m"
+
+# ==============================================================================
+# API SERVICE
+# ==============================================================================
+api:
+  enabled: true
+  replicas: 1
+  name: jeffrey-epstein-files-api
+  port: 8000
+  service:
+    name: jeffrey-epstein-files-api-service
+    type: NodePort
+    port: 8000
+    nodePort: 30800
+  resources:
+    requests:
+      memory: "3Gi"
+      cpu: "200m"
+    limits:
+      memory: "6Gi"
+      cpu: "500m"
+
+# ==============================================================================
+# JUPYTER NOTEBOOK - Enabled for development
+# ==============================================================================
+jupyter:
+  enabled: true
+  name: jupyter
+  namespace: data-dev
+  replicas: 1
+  
+  image:
+    repository: jeffrey-epstein-files-jupyter
+    tag: latest
+    pullPolicy: IfNotPresent
+  
+  service:
+    name: jupyter
+    type: NodePort
+    port: 8888
+    nodePort: 30888
+  
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  
+  persistence:
+    enabled: false
+    size: 1Gi
+  
+  env: []
+  volumeMounts: []
+  volumes: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  livenessProbe: {}
+  readinessProbe: {}
+
+# ==============================================================================
+# DEVELOPMENT POD
+# ==============================================================================
+devPod:
+  enabled: true
+
+# ==============================================================================
+# AUTOSCALING
+# ==============================================================================
+autoscaling:
+  enabled: false
+
+# ==============================================================================
+# LOGGING
+# ==============================================================================
+logLevel: DEBUG
+
+# ==============================================================================
+# FEATURES
+# ==============================================================================
+features:
+  metrics: false
+  tracing: false
+
+# ==============================================================================
+# INGRESS - Path-based routing
+# ==============================================================================
+ingress:
+  enabled: true
+  name: jeffrey-epstein-files-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
