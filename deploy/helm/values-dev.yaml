@@ -119,7 +119,7 @@ mlProcessor:
 # ML TRAINER JOB - Train the model
 # ==============================================================================
 mlTrainer:
-  enabled: false  # Set to true to run training job
+  enabled: true  # Set to true to run training job
   name: jeffrey-epstein-files-trainer
   image:
     name: jeffrey-epstein-files-trainer
@@ -167,7 +167,7 @@ jupyter:
   replicas: 1
   
   image:
-    repository: jeffrey-epstein-files-jupyter
+    repository: rinavillaruz/jeffrey-epstein-files-jupyter
     tag: latest
     pullPolicy: IfNotPresent
   
@@ -189,7 +189,11 @@ jupyter:
     enabled: false
     size: 1Gi
   
-  env: []
+  env:
+    - name: JUPYTER_BASE_URL
+      value: "/jupyter"
+    - name: JUPYTER_ENABLE_LAB
+      value: "yes"
   volumeMounts: []
   volumes: []
   nodeSelector: {}
@@ -197,7 +201,7 @@ jupyter:
   affinity: {}
   livenessProbe: {}
   readinessProbe: {}
-
+  
 # ==============================================================================
 # DEVELOPMENT POD
 # ==============================================================================
@@ -229,5 +233,4 @@ ingress:
   enabled: true
   name: jeffrey-epstein-files-ingress
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
     nginx.ingress.kubernetes.io/ssl-redirect: "false"

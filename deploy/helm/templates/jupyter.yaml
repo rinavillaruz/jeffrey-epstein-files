@@ -53,8 +53,6 @@ spec:
         - name: REDIS_PORT
           value: "6379"
         # Jupyter configuration
-        - name: JUPYTER_ENABLE_LAB
-          value: "yes"
         {{- if .Values.jupyter.env }}
         {{- toYaml .Values.jupyter.env | nindent 8 }}
         {{- end }}
@@ -76,7 +74,7 @@ spec:
         {{- else }}
         livenessProbe:
           httpGet:
-            path: /api
+            path: /jupyter/api
             port: http
           initialDelaySeconds: 30
           periodSeconds: 10
@@ -89,7 +87,7 @@ spec:
         {{- else }}
         readinessProbe:
           httpGet:
-            path: /api
+            path: /jupyter/api
             port: http
           initialDelaySeconds: 15
           periodSeconds: 5

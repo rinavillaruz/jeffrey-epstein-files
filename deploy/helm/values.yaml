@@ -107,6 +107,10 @@ api:
   replicas: 1
   name: jeffrey-epstein-files-api
   port: 8000
+  service:
+    name: jeffrey-epstein-files-api-service
+    type: ClusterIP
+    port: 8000
   resources:
     requests:
       memory: "256Mi"
@@ -114,7 +118,7 @@ api:
     limits:
       memory: "512Mi"
       cpu: "250m"
-
+      
 # ==============================================================================
 # ML PROCESSOR
 # ==============================================================================

@@ -27,8 +27,13 @@ fi
 MONGODB_USERNAME="${MONGODB_USERNAME:-admin}"
 MONGODB_PASSWORD="${MONGODB_PASSWORD:-}"
 
+# ========================================
+# 📥 Parse arguments
+# ========================================
+ENVIRONMENT=${1:-dev}
+
 # Cluster Configuration
-CLUSTER_NAME="${CLUSTER_NAME:-jeffrey-epstein-files-dev}"
+CLUSTER_NAME="${CLUSTER_NAME:-jeffrey-epstein-files}-${ENVIRONMENT}"
 
 # Debug mode
 if [ "${DEBUG:-false}" = "true" ]; then
@@ -53,10 +58,6 @@ print_green() { echo -e "${GREEN}$1${NC}"; }
 print_blue() { echo -e "${BLUE}$1${NC}"; }
 print_yellow() { echo -e "${YELLOW}$1${NC}"; }
 
-# ========================================
-# 📥 Parse arguments
-# ========================================
-ENVIRONMENT=${1:-dev}
 IMAGE_TAG=${2:-latest}
 
 print_blue "🎯 Deploying to environment: $ENVIRONMENT"
@@ -92,7 +93,7 @@ echo ""
 # ========================================
 # 🔐 Step 1: Detect environment and load credentials
 # ========================================
-print_blue "🔐 Step 0: Loading environment variables..."
+print_blue "🔐 Step 1: Loading environment variables..."
 
 if [ -n "$JENKINS_HOME" ]; then
     print_blue "🤖 Running in Jenkins CI/CD"
@@ -159,7 +160,7 @@ echo ""
 # 🔍 Step 2: Cluster setup
 # ========================================
 if [ "$SKIP_KIND" = false ]; then
-    print_blue "🔍 Step 1: Checking for existing cluster..."
+    print_blue "🔍 Step 2: Checking for existing cluster..."
     if kind get clusters 2>/dev/null | grep -q "$CLUSTER_NAME"; then
         print_yellow "⚠️  Cluster '$CLUSTER_NAME' already exists. Skipping creation."
     else
@@ -175,7 +176,7 @@ if [ "$SKIP_KIND" = false ]; then
         print_green "✅ Cluster is ready"
     fi
 else
-    print_blue "🔍 Step 1: Using existing Kubernetes cluster"
+    print_blue "🔍 Step 2: Using existing Kubernetes cluster"
     CURRENT_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "none")
     echo "Current context: $CURRENT_CONTEXT"
     
@@ -193,7 +194,7 @@ echo ""
 # 📊 Step 3: Metrics Server
 # ========================================
 if [ "$SKIP_METRICS" = false ]; then
-    print_blue "📊 Step 1.5: Installing Metrics Server..."
+    print_blue "📊 Step 3: Installing Metrics Server..."
     
     if ! kubectl cluster-info &> /dev/null; then
         print_red "❌ Cannot connect to cluster"
@@ -225,7 +226,7 @@ if [ "$SKIP_METRICS" = false ]; then
         }
     fi
 else
-    print_blue "📊 Step 1.5: Skipping metrics server (already installed)"
+    print_blue "📊 Step 3: Skipping metrics server (already installed)"
 fi
 echo ""
 
@@ -233,14 +234,28 @@ echo ""
 # 🌐 Step 4: Ingress Controller
 # ========================================
 if [ "$SKIP_METRICS" = false ]; then
-    print_blue "🌐 Step 1.6: Checking Ingress Controller..."
-    
+    print_blue "🌐 Step 4: Checking Ingress Controller..."
+
     if kubectl get namespace ingress-nginx &> /dev/null; then
         print_green "✅ Ingress Controller already installed"
     else
         print_blue "Installing nginx Ingress Controller..."
         kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
-        
+
+        # Pin to control-plane node (where port 80 is mapped)
+        print_blue "📌 Pinning Ingress Controller to control-plane node..."
+        kubectl patch deployment ingress-nginx-controller -n ingress-nginx --patch '{
+          "spec": {
+            "template": {
+              "spec": {
+                "nodeSelector": {
+                  "kubernetes.io/hostname": "'"${CLUSTER_NAME}"'-control-plane"
+                }
+              }
+            }
+          }
+        }'
+
         echo "⏳ Waiting for Ingress Controller to be ready..."
         kubectl wait --namespace ingress-nginx \
           --for=condition=ready pod \
@@ -251,14 +266,13 @@ if [ "$SKIP_METRICS" = false ]; then
         print_green "✅ Ingress Controller installed"
     fi
 else
-    print_blue "🌐 Step 1.6: Skipping Ingress Controller (already installed)"
+    print_blue "🌐 Step 4: Skipping Ingress Controller (already installed)"
 fi
-echo ""
 
 # ========================================
 # 📦 Step 5: Create namespaces
 # ========================================
-print_blue "📦 Step 2: Creating namespaces..."
+print_blue "📦 Step 5: Creating namespaces..."
 kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 kubectl create namespace ml-pipeline --dry-run=client -o yaml | kubectl apply -f -
 print_green "✅ Namespaces created"
@@ -269,7 +283,7 @@ sleep 2
 # ========================================
 # 🔐 Step 6: Create secrets
 # ========================================
-print_blue "🔐 Step 3: Creating secrets in $NAMESPACE..."
+print_blue "🔐 Step 6: Creating secrets in $NAMESPACE..."
 kubectl create secret generic mongodb-secret \
   --from-literal=username="$MONGODB_USERNAME" \
   --from-literal=password="$MONGODB_PASSWORD" \
@@ -288,27 +302,54 @@ echo ""
 # 🐳 Step 7: Build and Load Docker Images (Local only)
 # ========================================
 if [ "$IN_JENKINS" = false ]; then
-    print_blue "🐳 Step 3.5: Building and loading Docker images into Kind..."
+    print_blue "🐳 Step 7: Building and loading Docker images into Kind..."
     cd "$PROJECT_ROOT"
     
     # Build API image
     if [ -f "build/Dockerfile.dev" ]; then
         print_blue "Building API image..."
-        docker build -t jeffrey-epstein-files-api:${IMAGE_TAG} -f build/Dockerfile.dev . || {
+        docker build -t jeffrey-epstein-files-api:${IMAGE_TAG} --target api -f build/Dockerfile.dev . || {
             print_red "❌ Failed to build API image"
             exit 1
         }
-        print_green "✅ API image built"
+        
+        # Tag with registry prefix for Kubernetes
+        docker tag jeffrey-epstein-files-api:${IMAGE_TAG} rinavillaruz/jeffrey-epstein-files-api:${IMAGE_TAG}
+        print_green "✅ API image built and tagged"
         
         # Load into Kind cluster
         print_blue "Loading API image into Kind..."
-        kind load docker-image jeffrey-epstein-files-api:${IMAGE_TAG} --name "$CLUSTER_NAME" || {
+        kind load docker-image rinavillaruz/jeffrey-epstein-files-api:${IMAGE_TAG} --name "$CLUSTER_NAME" || {
             print_red "❌ Failed to load API image into Kind"
             exit 1
         }
         print_green "✅ API image loaded into cluster"
     else
         print_yellow "⚠️  build/Dockerfile.dev not found, skipping API build"
+    fi
+    echo ""
+    
+    # Build Trainer image
+    if [ -f "build/Dockerfile.dev" ]; then
+        print_blue "Building Trainer image..."
+        docker build -t jeffrey-epstein-files-trainer:${IMAGE_TAG} --target trainer -f build/Dockerfile.dev . || {
+            print_red "❌ Failed to build Trainer image"
+            exit 1
+        }
+        
+        # Tag with registry prefix for Kubernetes
+        docker tag jeffrey-epstein-files-trainer:${IMAGE_TAG} rinavillaruz/jeffrey-epstein-files-trainer:${IMAGE_TAG}
+        print_green "✅ Trainer image built and tagged"
+        
+        # Load into Kind cluster
+        print_blue "Loading Trainer image into Kind..."
+        kind load docker-image rinavillaruz/jeffrey-epstein-files-trainer:${IMAGE_TAG} --name "$CLUSTER_NAME" || {
+            print_red "❌ Failed to load Trainer image into Kind"
+            exit 1
+        }
+        print_green "✅ Trainer image loaded into cluster"
+    else
+        print_yellow "⚠️  build/Dockerfile.dev not found, skipping Trainer build"
     fi
     echo ""
     
@@ -320,11 +361,14 @@ if [ "$IN_JENKINS" = false ]; then
                 print_red "❌ Failed to build Jupyter image"
                 exit 1
             }
-            print_green "✅ Jupyter image built"
+            
+            # Tag with registry prefix for Kubernetes
+            docker tag jeffrey-epstein-files-jupyter:${IMAGE_TAG} rinavillaruz/jeffrey-epstein-files-jupyter:${IMAGE_TAG}
+            print_green "✅ Jupyter image built and tagged"
             
             # Load into Kind cluster
             print_blue "Loading Jupyter image into Kind..."
-            kind load docker-image jeffrey-epstein-files-jupyter:${IMAGE_TAG} --name "$CLUSTER_NAME" || {
+            kind load docker-image rinavillaruz/jeffrey-epstein-files-jupyter:${IMAGE_TAG} --name "$CLUSTER_NAME" || {
                 print_red "❌ Failed to load Jupyter image into Kind"
                 exit 1
             }
@@ -337,7 +381,7 @@ if [ "$IN_JENKINS" = false ]; then
     
     print_green "✅ All images built and loaded into Kind cluster"
 else
-    print_blue "🐳 Step 3.5: Skipping image build (running in Jenkins)"
+    print_blue "🐳 Step 7: Skipping image build (running in Jenkins)"
     print_yellow "Images should be pulled from Docker Hub in CI/CD pipeline"
 fi
 echo ""
@@ -345,7 +389,7 @@ echo ""
 # ========================================
 # 🔧 Step 8: Fix PVC Ownership
 # ========================================
-print_blue "🔧 Step 3.6: Ensuring PVC ownership for Helm..."
+print_blue "🔧 Step 8: Ensuring PVC ownership for Helm..."
 
 RELEASE_NAME="jeffrey-epstein-files"
 
@@ -391,7 +435,7 @@ echo ""
 # ========================================
 # 🎡 Step 9: Deploy with Helm
 # ========================================
-print_blue "🎡 Step 4: Deploying with Helm..."
+print_blue "🎡 Step 9: Deploying with Helm..."
 
 # Navigate to helm chart directory
 HELM_DIR="$PROJECT_ROOT/deploy/helm"
@@ -405,7 +449,7 @@ print_blue "Current directory: $(pwd)"
 
 # Validate Helm chart
 echo "Validating Helm chart..."
-if helm lint .; then
+if helm lint . -f values-${ENVIRONMENT}.yaml; then
     print_green "✅ Helm chart validation passed"
 else
     print_red "❌ Helm chart validation failed"
@@ -429,34 +473,43 @@ echo ""
 
 # Install or upgrade using single release name
 echo "Installing/upgrading Helm release..."
-if helm upgrade --install jeffrey-epstein-files . \
+helm upgrade --install jeffrey-epstein-files . \
   --namespace $NAMESPACE \
   --create-namespace \
   --values values-${ENVIRONMENT}.yaml \
   --set global.imageTag=${IMAGE_TAG} \
   --set mongodb.auth.username="$MONGODB_USERNAME" \
-  --set mongodb.auth.password="$MONGODB_PASSWORD" \
-  --timeout 10m \
-  --wait; then
-    print_green "✅ Helm deployment successful"
-else
-    print_red "❌ Helm deployment failed"
-    echo ""
-    print_yellow "Troubleshooting tips:"
-    echo "  1. Check if values-${ENVIRONMENT}.yaml is valid"
-    echo "  2. Run: helm lint . -f values-${ENVIRONMENT}.yaml"
-    echo "  3. Check logs: kubectl logs -n $NAMESPACE -l app=jeffrey-epstein-files-api"
-    echo "  4. Check pod status: kubectl get pods -n $NAMESPACE"
-    echo "  5. Describe pod: kubectl describe pod -n $NAMESPACE <pod-name>"
-    exit 1
-fi
+  --set mongodb.auth.password="$MONGODB_PASSWORD"
+
+print_blue "⏳ Waiting for pods to be ready..."
+ATTEMPTS=0
+MAX_ATTEMPTS=60  # 30 x 10s = 5 minutes max
+
+while kubectl get pods -n $NAMESPACE | grep -v "Running\|Completed\|NAME" | grep -q .; do
+    ATTEMPTS=$((ATTEMPTS + 1))
+    if [ $ATTEMPTS -ge $MAX_ATTEMPTS ]; then
+        print_red "❌ Helm deployment failed - pods not ready after 5 minutes"
+        echo ""
+        print_yellow "Troubleshooting tips:"
+        echo "  1. Check if values-${ENVIRONMENT}.yaml is valid"
+        echo "  2. Run: helm lint . -f values-${ENVIRONMENT}.yaml"
+        echo "  3. Check logs: kubectl logs -n $NAMESPACE -l app=jeffrey-epstein-files-api"
+        echo "  4. Check pod status: kubectl get pods -n $NAMESPACE"
+        echo "  5. Describe pod: kubectl describe pod -n $NAMESPACE <pod-name>"
+        exit 1
+    fi
+    echo "  Pods not ready yet... (attempt $ATTEMPTS/$MAX_ATTEMPTS)"
+    sleep 10
+done
+
+print_green "✅ Helm deployment successful"
 
 echo ""
 
 # ========================================
 # ⏳ Step 10: Wait for pods
 # ========================================
-print_blue "⏳ Step 5: Waiting for pods to be ready..."
+print_blue "⏳ Step 10: Waiting for pods to be ready..."
 print_yellow "This may take a few minutes..."
 echo ""
 

@@ -25,6 +25,14 @@ fi
 ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
 JENKINS_NAMESPACE="${JENKINS_NAMESPACE:-jenkins}"
 
+# ========================================
+# 📥 Parse arguments
+# ========================================
+ENVIRONMENT=${1:-dev}
+
+# Cluster Configuration
+CLUSTER_NAME="${CLUSTER_NAME:-jeffrey-epstein-files}-${ENVIRONMENT}"
+
 # Auto-detect cluster name - use what Kind knows about
 if [ -z "$CLUSTER_NAME" ]; then
     # Try to get from current context first
@@ -441,9 +449,9 @@ if [ ${#PRESERVED[@]} -gt 0 ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Step 8: Delete Kind cluster (optional - only when cleaning all)
+# Step 8: Delete Kind cluster
 # -----------------------------------------------------------------------------
-if [ "$ENVIRONMENT" = "all" ]; then
+if [ "$ENVIRONMENT" = "dev" ]; then
     echo "=========================================="
     echo "🔥 Delete Kind Cluster?"
     echo "=========================================="
@@ -550,8 +558,8 @@ if [ -n "$REMAINING_CLUSTERS" ]; then
         # Check remaining environments
         for env_ns in "data-dev" "data-staging" "data-production" "data" "default"; do
             if kubectl get namespace "$env_ns" &>/dev/null 2>&1; then
-                POD_COUNT=$(kubectl get pods -n "$env_ns" 2>/dev/null | grep -c "jeffrey-epstein-files" || echo "0")
-                if [ "$POD_COUNT" -gt 0 ]; then
+                POD_COUNT=$(kubectl get pods -n "$env_ns" 2>/dev/null | grep -c "jeffrey-epstein-files" || true)
+                if [ "${POD_COUNT:-0}" -gt 0 ]; then
                     echo "  ⚠️  $env_ns namespace has $POD_COUNT jeffrey-epstein-files pod(s) still running"
                 fi
             fi

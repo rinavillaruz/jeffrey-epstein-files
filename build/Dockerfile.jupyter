@@ -1,19 +1,16 @@
 # syntax=docker/dockerfile:1
-# Jupyter Notebook Environment for DoJeffrey Epstein Files
-# Interactive development and data exploration
+# Jupyter Notebook Environment
 
 FROM python:3.11-slim
 
 WORKDIR /workspace
 
-# Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     JUPYTER_ENABLE_LAB=yes
 
-# Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         gcc \
@@ -23,10 +20,8 @@ RUN apt-get update && \
         vim && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
 COPY build/requirements.txt .
 
-# Install Python packages including Jupyter and dev tools
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "📚 Installing Python packages..." && \
     pip install --progress-bar on -r requirements.txt && \
@@ -52,18 +47,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         ipdb && \
     echo "✅ All packages installed successfully!"
 
-# Create directories for mounted volumes
 RUN mkdir -p /workspace/notebooks \
              /workspace/src \
              /workspace/data \
              /workspace/models \
              /workspace/scripts
 
-# Copy source code (will be overridden by volume mounts in K8s)
-COPY src/ /workspace/src/
 COPY scripts/ /workspace/scripts/
+COPY src/api /workspace/src/api
 
-# Configure Jupyter
 RUN jupyter notebook --generate-config && \
     echo "c.NotebookApp.ip = '0.0.0.0'" >> ~/.jupyter/jupyter_notebook_config.py && \
     echo "c.NotebookApp.port = 8888" >> ~/.jupyter/jupyter_notebook_config.py && \
@@ -72,15 +64,11 @@ RUN jupyter notebook --generate-config && \
     echo "c.NotebookApp.token = ''" >> ~/.jupyter/jupyter_notebook_config.py && \
     echo "c.NotebookApp.password = ''" >> ~/.jupyter/jupyter_notebook_config.py
 
-# Expose Jupyter port
 EXPOSE 8888
 
-# Set working directory to notebooks
 WORKDIR /workspace/notebooks
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD curl -f http://localhost:8888/ || exit 1
 
-# Start Jupyter Notebook
-CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", "--NotebookApp.token=''", "--NotebookApp.password=''"]
+CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", "--NotebookApp.token=''", "--NotebookApp.password=''", "--NotebookApp.base_url=/jupyter"]

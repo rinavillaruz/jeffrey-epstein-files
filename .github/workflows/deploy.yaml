@@ -83,7 +83,7 @@ jobs:
           
           helm upgrade --install jeffrey-epstein-files-$ENVIRONMENT ./deploy/helm \
             -f ./deploy/helm/values-$ENVIRONMENT.yaml \
-            --set image.tag=$IMAGE_TAG \
+            --set global.imageTag=$IMAGE_TAG \
             -n $NAMESPACE \
             --create-namespace
       
@@ -154,7 +154,7 @@ jobs:
           # Monitoring URL (customize to your setup)
           MONITORING_URL="http://localhost:30000/d/jeffrey-epstein-files-$ENV"
           
-          curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+          curl -X POST "${{ secrets.SLACK_WEBHOOK_GITHUB }}" \
             -H 'Content-Type: application/json' \
             -d "{
               \"channel\": \"#github-deployments\",

@@ -2,10 +2,11 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ .Values.ingress.name }}
+  name: {{ .Values.ingress.name }}-api
   namespace: {{ .Values.global.namespace }}
   annotations:
-    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
 spec:
   ingressClassName: nginx
   rules:
@@ -18,8 +19,21 @@ spec:
             name: {{ .Values.api.service.name }}
             port:
               number: {{ .Values.api.service.port }}
-      - path: /jupyter(/|$)(.*)
-        pathType: ImplementationSpecific
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.ingress.name }}-jupyter
+  namespace: {{ .Values.global.namespace }}
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /jupyter
+        pathType: Prefix
         backend:
           service:
             name: {{ .Values.jupyter.service.name }}
