@@ -93,9 +93,10 @@ jobs:
             OWNER=$(kubectl get $pvc -n $NAMESPACE -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null)
             if [ "$OWNER" != "$NEW_RELEASE" ] && [ -n "$OWNER" ]; then
               echo "Deleting $pvc with wrong owner: $OWNER"
-              kubectl delete $pvc -n $NAMESPACE
+              kubectl delete $pvc -n $NAMESPACE --grace-period=0 --force &
             fi
           done
+          wait
 
       - name: Deploy with Helm
         env:
