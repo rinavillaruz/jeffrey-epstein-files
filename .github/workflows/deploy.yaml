@@ -98,6 +98,15 @@ jobs:
           done
           wait
 
+          # Remove finalizers from any stuck Terminating PVCs
+          for pvc in $(kubectl get pvc -n $NAMESPACE -o name 2>/dev/null); do
+            STATUS=$(kubectl get $pvc -n $NAMESPACE -o jsonpath='{.status.phase}' 2>/dev/null)
+            if [ "$STATUS" = "Terminating" ]; then
+              echo "Removing finalizers from stuck PVC: $pvc"
+              kubectl patch $pvc -n $NAMESPACE -p '{"metadata":{"finalizers":null}}' --type=merge
+            fi
+          done
+
       - name: Deploy with Helm
         env:
           ENVIRONMENT: ${{ steps.env.outputs.environment }}
