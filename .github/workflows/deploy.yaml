@@ -124,6 +124,30 @@ jobs:
             -n $NAMESPACE \
             --create-namespace
       
+      - name: Clean up old trainer jobs
+        env:
+          ENVIRONMENT: ${{ steps.env.outputs.environment }}
+        run: |
+          if [[ "$ENVIRONMENT" == "production" ]]; then
+            NAMESPACE="data"
+          else
+            NAMESPACE="data-$ENVIRONMENT"
+          fi
+
+          # Delete completed trainer pods older than 1 day
+          kubectl get pods -n $NAMESPACE --no-headers \
+            | grep "jeffrey-epstein-files-trainer" \
+            | grep "Completed" \
+            | awk '{print $1}' \
+            | while read pod; do
+              AGE=$(kubectl get pod $pod -n $NAMESPACE -o jsonpath='{.metadata.creationTimestamp}')
+              AGE_SECONDS=$(( $(date -u +%s) - $(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$AGE" +%s 2>/dev/null || echo 0) ))
+              if [ $AGE_SECONDS -gt 86400 ]; then
+                echo "Deleting old trainer pod: $pod"
+                kubectl delete pod $pod -n $NAMESPACE
+              fi
+            done
+
       - name: Send Slack notification
         if: always()
         run: |
