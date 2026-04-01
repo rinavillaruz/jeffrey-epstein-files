@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fetcher-dev
+  namespace: data-dev
+  labels:
+    app: jeffrey-epstein-files-fetcher
+spec:
+  containers:
+  - name: fetcher
+    image: rinavillaruz/jeffrey-epstein-files-fetcher
+    command: ["sleep", "infinity"]
+    volumeMounts:
+      - mountPath: /data
+        name: training-data
+  volumes:
+  - name: training-data
+    persistentVolumeClaim:
+      claimName: jeffrey-epstein-files-trainer-training-data
+  restartPolicy: Never

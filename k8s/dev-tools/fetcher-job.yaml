@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fetcher-job
+  namespace: data-dev
+  labels:
+    app: jeffrey-epstein-files-fetcher
+spec:
+  parallelism: 4
+  completions: 4
+  completionMode: Indexed
+  template:
+    metadata:
+      labels:
+        app: jeffrey-epstein-files-fetcher
+    spec:
+      containers:
+      - name: fetcher
+        image: rinavillaruz/jeffrey-epstein-files-fetcher
+        imagePullPolicy: Never
+        command: ["python", "scripts/fetch_data.py"]
+        env:
+        - name: WORKERS
+          value: "50"
+        - name: TOTAL_PODS
+          value: "4"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        volumeMounts:
+          - mountPath: /data
+            name: training-data
+      volumes:
+      - name: training-data
+        persistentVolumeClaim:
+          claimName: jeffrey-epstein-files-trainer-training-data
+      restartPolicy: Never
