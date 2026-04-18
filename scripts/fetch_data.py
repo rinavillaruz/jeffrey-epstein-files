@@ -8,7 +8,6 @@ cookies = {
     "justiceGovAgeVerified" : "true"
 }
 
-# This block figures out which pod we are and calculates which files we are responsible for downloading.
 dataset = {"number": 1, "start": 1, "end": 650}
 
 pod_index   = int(os.environ.get("JOB_COMPLETION_INDEX", 0))
@@ -23,7 +22,7 @@ end   = start + chunk_size if pod_index < total_pods - 1 else dataset["end"]
 
 print(f"Pod {pod_index}: downloading dataset {dataset['number']} from {start} to {end}")
 
-os.makedirs(f"/data/dataset-{dataset['number']}", exist_ok=True)  # add this back
+os.makedirs(f"/data/dataset-{dataset['number']}", exist_ok=True)
 
 def download_file(url, filename):
    if os.path.exists(filename):
